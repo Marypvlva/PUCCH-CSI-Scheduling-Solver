@@ -1,4 +1,5 @@
 import random
+import time
 
 L = 320
 R = 58
@@ -93,12 +94,10 @@ def find_best_for_one_user(
                 )
 
                 quality = distance + period
-
                 adaptive_penalty = base_penalty * (1 + load_factor / 5)
                 new_rb_penalty = adaptive_penalty if rb not in used_rbs else 0
 
                 score = quality_weight * quality + new_rb_penalty
-
                 candidate = (score, distance, period, rb, offset)
                 best = (best_score, best_distance, best_period, best_rb, best_offset)
 
@@ -115,13 +114,7 @@ def find_best_for_one_user(
     return best_rb, best_period, best_offset, best_distance
 
 
-def greedy_solve(
-    users,
-    dl,
-    ul,
-    base_penalty=60,
-    quality_weight=1.0,
-):
+def greedy_solve(users, dl, ul, base_penalty=60, quality_weight=1.0):
     occupied = [[False for _ in range(L)] for _ in range(R)]
     answers = []
 
@@ -152,15 +145,7 @@ def greedy_solve(
     return answers, objective_value(answers)
 
 
-def multistart_solve(
-    users,
-    dl,
-    ul,
-    base_penalty=60,
-    attempts=50,
-    seed=123,
-    quality_weight=1.0,
-):
+def multistart_solve(users, dl, ul, base_penalty=60, attempts=50, seed=123, quality_weight=1.0):
     random.seed(seed)
 
     best_answers = None
@@ -183,7 +168,6 @@ def multistart_solve(
         )
 
         restored_answers = []
-
         for answer, original_id in zip(answers, original_ids):
             fixed = answer.copy()
             fixed["user_id"] = original_id
@@ -208,7 +192,6 @@ def local_search_one_user_moves(users, answers, dl, ul, max_rounds=2):
             user = users[user_id]
 
             occupied = build_occupied_from_answers(answers)
-
             remove_csi(
                 occupied,
                 current_answer["rb"],
@@ -460,7 +443,6 @@ def final_solver(
 def portfolio_solver(users, dl, ul):
     configs = [
         {"base_penalty": 60, "attempts": 50, "local_rounds": 2, "seed_shift": 1000, "quality_weight": 1.0, "random_destroy_fraction": 0.0},
-
         {"base_penalty": 40, "attempts": 50, "local_rounds": 2, "seed_shift": 4000, "quality_weight": 1.0, "random_destroy_fraction": 0.3},
         {"base_penalty": 80, "attempts": 50, "local_rounds": 2, "seed_shift": 5000, "quality_weight": 1.5, "random_destroy_fraction": 0.3},
         {"base_penalty": 80, "attempts": 50, "local_rounds": 2, "seed_shift": 6000, "quality_weight": 2.0, "random_destroy_fraction": 0.3},
@@ -502,7 +484,10 @@ def generate_random_users(n: int, seed: int = 1):
         csi_periods = possible_periods[start:]
 
         srs_period = random.choice([40, 80])
-        srs_offsets = random.sample(range(srs_period), k=random.randint(1, 3))
+        srs_offsets = random.sample(
+            range(srs_period),
+            k=random.randint(1, 3),
+        )
 
         users.append({
             "csi_periods": csi_periods,
@@ -516,11 +501,14 @@ def generate_random_users(n: int, seed: int = 1):
 def benchmark():
     dl, ul = 8, 2
     scores = []
+    times = []
 
     for seed in range(1, 6):
         users = generate_random_users(n=100, seed=seed)
 
+        start = time.perf_counter()
         output, score, cfg = portfolio_solver(users, dl, ul)
+        elapsed = time.perf_counter() - start
 
         rb_used = len({rb for rb, period, offset in output if period != 640})
 
@@ -528,15 +516,20 @@ def benchmark():
             f"seed={seed:2d} | "
             f"rb_used={rb_used:2d} | "
             f"objective={score} | "
+            f"time={elapsed * 1000:.2f} ms | "
             f"cfg={cfg}"
         )
 
         scores.append(score)
+        times.append(elapsed * 1000)
 
     print()
-    print("Average:", sum(scores) / len(scores))
-    print("Min:", min(scores))
-    print("Max:", max(scores))
+    print("Average objective:", sum(scores) / len(scores))
+    print("Min objective:", min(scores))
+    print("Max objective:", max(scores))
+    print("Average time, ms:", sum(times) / len(times))
+    print("Min time, ms:", min(times))
+    print("Max time, ms:", max(times))
 
 
 if __name__ == "__main__":
