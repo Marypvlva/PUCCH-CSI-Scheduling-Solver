@@ -3914,6 +3914,86 @@ def cpsat_lower_bound_report(
     )
 
 
+def mckp_quality_lower_bound(users, dl, ul, rb_budget):
+    """Optimistic quality bound under total occupied-cell capacity.
+
+    The bound chooses one CSI time mask per user and ignores exact slot/RB
+    collisions, so every feasible schedule using rb_budget RBs must have
+    quality at least this value.
+    """
+    uplink_slots = popcount(uplink_mask(dl, ul))
+    capacity = rb_budget * uplink_slots
+    inf = 10**15
+    dp = [inf] * (capacity + 1)
+    dp[0] = 0
+
+    for user in users:
+        best_by_cells = {}
+        for _, _, mask, _, quality in time_options_for_user(user, dl, ul):
+            cells = popcount(mask)
+            if cells <= capacity:
+                best_by_cells[cells] = min(best_by_cells.get(cells, inf), quality)
+
+        next_dp = [inf] * (capacity + 1)
+        for used, value in enumerate(dp):
+            if value >= inf:
+                continue
+            for cells, quality in best_by_cells.items():
+                new_used = used + cells
+                if new_used <= capacity:
+                    next_dp[new_used] = min(next_dp[new_used], value + quality)
+        dp = next_dp
+
+    lower_bound = min(dp)
+    used_cells = min(range(capacity + 1), key=lambda cells: dp[cells])
+    return lower_bound, used_cells, capacity
+
+
+def mckp_lower_bound_report(n=50, seed=1, difficulty="medium", rb_budget=None):
+    dl, ul = 8, 2
+    users = generate_random_users(n=n, seed=seed, difficulty=difficulty)
+    if rb_budget is None:
+        rb_budget = math.ceil(n / popcount(uplink_mask(dl, ul)))
+
+    lower_bound, used_cells, capacity = mckp_quality_lower_bound(users, dl, ul, rb_budget)
+    print(
+        f"mckp_lower_bound n={n} seed={seed} difficulty={difficulty} "
+        f"rb_budget={rb_budget} capacity={capacity} used_cells={used_cells} "
+        f"quality_lb={lower_bound} product_lb={rb_budget * lower_bound}"
+    )
+
+
+def mckp_lower_bound_jsonl_report(path, rb_budget=None):
+    dl, ul = 8, 2
+    print("case,rb_budget,quality,quality_lb,gap_q,product,product_lb,gap_product")
+    with open(path, "r", encoding="utf-8") as file:
+        for line_no, line in enumerate(file, start=1):
+            record = json.loads(line)
+            users = record["users"]
+            answers = record.get("answers")
+            case_id = record.get("case", line_no)
+            selected_rb_budget = rb_budget
+            stats = None
+            if answers:
+                stats = solution_stats(answers)
+                if selected_rb_budget is None:
+                    selected_rb_budget = stats["rb_used"]
+            if selected_rb_budget is None:
+                selected_rb_budget = math.ceil(len(users) / popcount(uplink_mask(dl, ul)))
+
+            lower_bound, _, _ = mckp_quality_lower_bound(users, dl, ul, selected_rb_budget)
+            product_lb = selected_rb_budget * lower_bound
+            if stats is None:
+                print(f"{case_id},{selected_rb_budget},,{lower_bound},,,{product_lb},")
+                continue
+
+            print(
+                f"{case_id},{selected_rb_budget},{stats['quality_sum']},{lower_bound},"
+                f"{stats['quality_sum'] - lower_bound},{stats['objective']},{product_lb},"
+                f"{stats['objective'] - product_lb}"
+            )
+
+
 def parse_int_list(value):
     return [int(part.strip()) for part in value.split(",") if part.strip()]
 
@@ -3965,6 +4045,9 @@ def main():
     parser.add_argument("--exact-seed", type=int, default=1)
     parser.add_argument("--cpsat-small", action="store_true", help="run CP-SAT RB-budget sweep")
     parser.add_argument("--cpsat-lower-bound", action="store_true", help="report fixed-RB CP-SAT lower-bound evidence")
+    parser.add_argument("--mckp-lower-bound", action="store_true", help="report optimistic occupied-cell knapsack quality lower bound")
+    parser.add_argument("--mckp-rb-budget", type=int, default=None, help="RB budget for --mckp-lower-bound")
+    parser.add_argument("--mckp-input-jsonl", default=None, help="read users or dumped answers from JSONL and report MCKP bounds")
     parser.add_argument("--cpsat-time", type=float, default=5.0, help="CP-SAT time limit per RB budget")
     parser.add_argument("--cpsat-max-rb", type=int, default=None, help="maximum RB budget to sweep")
     parser.add_argument(
@@ -4010,6 +4093,18 @@ def main():
             max_rb=args.cpsat_max_rb,
             occupied_fraction=args.occupied_fraction,
         )
+        return
+
+    if args.mckp_lower_bound:
+        if args.mckp_input_jsonl:
+            mckp_lower_bound_jsonl_report(args.mckp_input_jsonl, rb_budget=args.mckp_rb_budget)
+        else:
+            mckp_lower_bound_report(
+                n=args.exact_n,
+                seed=args.exact_seed,
+                difficulty=args.difficulty,
+                rb_budget=args.mckp_rb_budget,
+            )
         return
 
     benchmark(
